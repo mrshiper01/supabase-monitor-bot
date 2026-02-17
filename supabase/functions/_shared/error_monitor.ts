@@ -1,20 +1,21 @@
 const DISCORD_EMBED_COLOR_ERROR = 15158332; // Rojo
+const DEFAULT_PROJECT_NAME = "Proyecto Desconocido";
+const DEFAULT_LOG_TABLE = "function_errors";
 
-export async function notifyError(functionName: string, error: Error): Promise<void> {
+function formatDateTime(date: Date): string {
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+async function notifyDiscord(functionName: string, projectName: string, error: Error): Promise<void> {
   const webhookUrl = Deno.env.get("DISCORD_WEBHOOK_URL");
   if (!webhookUrl) {
-    console.error("DISCORD_WEBHOOK_URL no está configurada. No se envió notificación.");
+    console.error("DISCORD_WEBHOOK_URL no está configurada. No se envió notificación a Discord.");
     return;
   }
 
-  const projectName = Deno.env.get("PROJECT_NAME") ?? "Proyecto Desconocido";
-
   const now = new Date();
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  const dateTime =
-    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
-    `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-
   const body = {
     embeds: [
       {
@@ -38,7 +39,7 @@ export async function notifyError(functionName: string, error: Error): Promise<v
           },
           {
             name: "Fecha/Hora",
-            value: dateTime,
+            value: formatDateTime(now),
             inline: true,
           },
         ],
@@ -55,4 +56,51 @@ export async function notifyError(functionName: string, error: Error): Promise<v
   if (!res.ok) {
     console.error("Error al enviar notificación a Discord:", res.status, await res.text());
   }
+}
+
+async function saveErrorInSupabase(functionName: string, projectName: string, error: Error): Promise<void> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const tableName = Deno.env.get("ERROR_LOG_TABLE") ?? DEFAULT_LOG_TABLE;
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    console.error(
+      "SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY no está configurada. No se guardó el error en Supabase.",
+    );
+    return;
+  }
+
+  const restUrl = `${supabaseUrl}/rest/v1/${tableName}`;
+  const payload = {
+    project_name: projectName,
+    function_name: functionName,
+    error_message: error.message || String(error),
+    error_stack: error.stack ?? null,
+    occurred_at: new Date().toISOString(),
+  };
+
+  const res = await fetch(restUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    console.error("Error al guardar log en Supabase:", res.status, await res.text());
+  }
+}
+
+export async function notifyError(functionName: string, error: Error): Promise<void> {
+  const projectName = Deno.env.get("PROJECT_NAME") ?? DEFAULT_PROJECT_NAME;
+
+  const tasks = [
+    notifyDiscord(functionName, projectName, error),
+    saveErrorInSupabase(functionName, projectName, error),
+  ];
+  await Promise.allSettled(tasks);
 }
