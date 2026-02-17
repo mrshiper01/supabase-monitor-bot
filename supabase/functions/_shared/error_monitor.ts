@@ -1,6 +1,7 @@
 const DISCORD_EMBED_COLOR_ERROR = 15158332; // Rojo
 const DEFAULT_PROJECT_NAME = "Proyecto Desconocido";
 const DEFAULT_LOG_TABLE = "function_errors";
+const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
 
 function formatDateTime(date: Date): string {
   const pad = (n: number) => n.toString().padStart(2, "0");
@@ -22,26 +23,10 @@ async function notifyDiscord(functionName: string, projectName: string, error: E
         title: "🚨 Error en Edge Function",
         color: DISCORD_EMBED_COLOR_ERROR,
         fields: [
-          {
-            name: "Proyecto",
-            value: projectName,
-            inline: true,
-          },
-          {
-            name: "Nombre de la función",
-            value: functionName,
-            inline: true,
-          },
-          {
-            name: "Mensaje de error",
-            value: error.message || String(error),
-            inline: false,
-          },
-          {
-            name: "Fecha/Hora",
-            value: formatDateTime(now),
-            inline: true,
-          },
+          { name: "Proyecto", value: projectName, inline: true },
+          { name: "Nombre de la función", value: functionName, inline: true },
+          { name: "Mensaje de error", value: error.message || String(error), inline: false },
+          { name: "Fecha/Hora", value: formatDateTime(now), inline: true },
         ],
       },
     ],
@@ -97,10 +82,30 @@ async function saveErrorInSupabase(functionName: string, projectName: string, er
 
 export async function notifyError(functionName: string, error: Error): Promise<void> {
   const projectName = Deno.env.get("PROJECT_NAME") ?? DEFAULT_PROJECT_NAME;
-
   const tasks = [
     notifyDiscord(functionName, projectName, error),
     saveErrorInSupabase(functionName, projectName, error),
   ];
   await Promise.allSettled(tasks);
+}
+
+type EdgeHandler = (request: Request) => Response | Promise<Response>;
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+export function withErrorMonitoring(functionName: string, handler: EdgeHandler): EdgeHandler {
+  return async (request: Request): Promise<Response> => {
+    try {
+      return await handler(request);
+    } catch (error) {
+      const normalizedError = toError(error);
+      await notifyError(functionName, normalizedError);
+      return new Response(
+        JSON.stringify({ error: "Internal Server Error", function_name: functionName }),
+        { status: 500, headers: { "Content-Type": JSON_CONTENT_TYPE } },
+      );
+    }
+  };
 }
