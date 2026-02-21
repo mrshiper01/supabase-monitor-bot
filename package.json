@@ -1,6 +1,10 @@
 {
-	"dependencies": {
-		"deno": "^2.6.8",
-		"supabase": "^2.76.9"
-	}
+  "dependencies": {
+    "deno": "^2.6.8",
+    "supabase": "^2.76.9"
+  },
+  "scripts": {
+    "preview-alerta": "deno run --allow-env --allow-read --allow-net scripts/preview-alerta.ts",
+    "register-commands": "deno run --allow-env --allow-read --allow-net scripts/register-commands.ts"
+  }
 }
